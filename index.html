@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>学校図書室 貸出・返却管理</title>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: 20px auto; padding: 0 10px; }
+    .hidden { display: none; }
+    .card { border: 1px solid #ccc; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+    form div { margin-bottom: 10px; }
+    label { display: inline-block; width: 120px; font-weight: bold; }
+    input, select, button { padding: 8px; font-size: 14px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background-color: #f4f4f4; }
+  </style>
+</head>
+<body>
+
+  <h1>学校図書室 貸出・返却システム</h1>
+
+  <!-- 未ログイン時の表示画面 -->
+  <div id="login-screen" class="card">
+    <h2>ログインが必要です</h2>
+    <p>学校図書室管理システムを使用するには、Googleアカウントでログインしてください。</p>
+    <button id="btn-login">Googleでログイン</button>
+  </div>
+
+  <!-- ログイン後の画面（初期状態は非表示） -->
+  <div id="app-screen" class="hidden">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <p>ようこそ <strong id="user-name"></strong> さん</p>
+      <button id="btn-logout">ログアウト</button>
+    </div>
+
+    <!-- 5項目の入力フォーム -->
+    <div class="card">
+      <h3>貸出・返却の記録</h3>
+      <form id="record-form">
+        <div>
+          <label for="studentName">児童・生徒名:</label>
+          <input type="text" id="studentName" required>
+        </div>
+        <div>
+          <label for="bookTitle">書名:</label>
+          <input type="text" id="bookTitle" required>
+        </div>
+        <div>
+          <label for="type">区分:</label>
+          <select id="type" required>
+            <option value="貸出">貸出</option>
+            <option value="返却">返却</option>
+          </select>
+        </div>
+        <div>
+          <label for="date">日付:</label>
+          <input type="date" id="date" required>
+        </div>
+        <div>
+          <label for="note">備考:</label>
+          <input type="text" id="note" placeholder="学年・学級や状態など">
+        </div>
+        <button type="submit">登録</button>
+      </form>
+    </div>
+
+    <!-- データ一覧表示 -->
+    <div class="card">
+      <h3>記録一覧</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>日付</th>
+            <th>区分</th>
+            <th>児童・生徒名</th>
+            <th>書名</th>
+            <th>備考</th>
+          </tr>
+        </thead>
+        <tbody id="record-list">
+          <!-- Firestoreから動的に取得 -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Firebase SDK (v10) の読み込み -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { 
+      getAuth, 
+      signInWithPopup, 
+      GoogleAuthProvider, 
+      signOut, 
+      onAuthStateChanged 
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+    import { 
+      getFirestore, 
+      collection, 
+      addDoc, 
+      query, 
+      orderBy, 
+      onSnapshot, 
+      serverTimestamp 
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    // Firebase 設定情報 (自身のプロジェクト情報に置き換えてください)
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT_ID.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+
+    // 初期化
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    const loginScreen = document.getElementById('login-screen');
+    const appScreen = document.getElementById('app-screen');
+    const userNameEl = document.getElementById('user-name');
+    const recordForm = document.getElementById('record-form');
+    const recordList = document.getElementById('record-list');
+
+    // 今日の日付を初期値にセット
+    document.getElementById('date').valueAsDate = new Date();
+
+    // 1. Google 認証処理
+    document.getElementById('btn-login').addEventListener('click', () => {
+      const provider = new GoogleAuthProvider();
+      signInWithPopup(auth, provider).catch(error => alert("ログインエラー: " + error.message));
+    });
+
+    document.getElementById('btn-logout').addEventListener('click', () => {
+      signOut(auth);
+    });
+
+    // ログイン状態の監視 (未ログイン時は入力画面を表示しない)
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        loginScreen.classList.add('hidden');
+        appScreen.classList.remove('hidden');
+        userNameEl.textContent = user.displayName || user.email;
+        loadRecords(); // ログイン後にデータを読み込み
+      } else {
+        loginScreen.classList.remove('hidden');
+        appScreen.classList.add('hidden');
+      }
+    });
+
+    // 2. 登録ボタンでのデータ追加
+    recordForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const newRecord = {
+        studentName: document.getElementById('studentName').value,
+        bookTitle: document.getElementById('bookTitle').value,
+        type: document.getElementById('type').value,
+        date: document.getElementById('date').value,
+        note: document.getElementById('note').value,
+        createdAt: serverTimestamp()
+      };
+
+      try {
+        await addDoc(collection(db, "library_records"), newRecord);
+        alert("登録が完了しました！");
+        recordForm.reset();
+        document.getElementById('date').valueAsDate = new Date();
+      } catch (error) {
+        console.error("登録エラー:", error);
+        alert("保存に失敗しました。");
+      }
+    });
+
+    // 3. データ一覧のリアルタイム取得（再読み込みしてもFirestoreから復元される）
+    function loadRecords() {
+      const q = query(collection(db, "library_records"), orderBy("createdAt", "desc"));
+      
+      onSnapshot(q, (snapshot) => {
+        recordList.innerHTML = "";
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${data.date || ''}</td>
+            <td><strong>${data.type || ''}</strong></td>
+            <td>${data.studentName || ''}</td>
+            <td>${data.bookTitle || ''}</td>
+            <td>${data.note || ''}</td>
+          `;
+          recordList.appendChild(tr);
+        });
+      });
+    }
+  </script>
+</body>
+</html>
